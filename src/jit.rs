@@ -8,9 +8,14 @@ use std::{
 use crate::{Cpu, Op};
 use errno::errno;
 use libc::{
-    MAP_ANONYMOUS, MAP_FAILED, MAP_JIT, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, free,
+    MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, free,
     malloc, memcpy, memset, mmap, mprotect, munmap, strerror,
 };
+
+#[cfg(target_os = "macos")]
+use libc::MAP_JIT;
+#[cfg(not(target_os = "macos"))]
+const MAP_JIT: i32 = 0; // Unused on non macos systems
 
 const JIT_MEMORY_SIZE: usize = 1 * 1024 * 1024;
 
@@ -49,24 +54,24 @@ impl Op {
     #[cfg(target_arch = "x86_64")]
     fn inc(buffer: &mut Vec<u8>, operand: u32) {
         buffer.push_bytes(b"\x80\x07"); // add byte[rdi],
-        buffer.push_u8(operand & 0xFF);
+        buffer.push_u8(operand as u8);
     }
     #[cfg(target_arch = "aarch64")]
     fn inc(buffer: &mut Vec<u8>, operand: u32) {
         buffer.push_bytes(b"\x08\x00\x40\x39"); // ldrb w8, [x0]
-        let add_op = 0x11000108 | (operand & 0xFF) << 10;
+        let add_op = 0x11000108 | (operand as u8) << 10;
         buffer.push_u32(add_op); // add w8, w8, #constant (operand)
         buffer.push_bytes(b"\x08\x00\x00\x39"); // strb w8, [x0]
     }
     #[cfg(target_arch = "x86_64")]
     fn dec(buffer: &mut Vec<u8>, operand: u32) {
         buffer.push_bytes(b"\x80\x2f"); // sub byte[rdi],
-        buffer.push_u8(operand & 0xFF);
+        buffer.push_u8(operand as u8);
     }
     #[cfg(target_arch = "aarch64")]
     fn dec(buffer: &mut Vec<u8>, operand: u32) {
         buffer.push_bytes(b"\x08\x00\x40\x39"); // ldrb w8, [x0]
-        let sub_op = 0x51000108 | (operand & 0xFF) << 10;
+        let sub_op = 0x51000108 | (operand as u8) << 10;
         buffer.push_u32(sub_op); // sub w8, w8, operand
         buffer.push_bytes(b"\x08\x00\x00\x39"); // strb w8, [x0]
     }
@@ -82,7 +87,7 @@ impl Op {
         if operand >= 256 {
             todo!("TODO: support bigger operands");
         }
-        let add_op = 0xd1000000 | (operand & 0xFF) << 10;
+        let add_op = 0xd1000000 | (operand as u8) << 10;
         buffer.push_u32(add_op); // sub x0, x0, operand
     }
 
@@ -97,19 +102,19 @@ impl Op {
         if operand >= 256 {
             todo!("TODO: support bigger operands");
         }
-        let add_op = 0x91000000 | (operand & 0xFF) << 10;
+        let add_op = 0x91000000 | (operand as u8) << 10;
         buffer.push_u32(add_op); // add x0, x0, operand
     }
 
     #[cfg(target_arch = "x86_64")]
     fn out(buffer: &mut Vec<u8>) {
-        buffer.push_u8(b"\x57"); // push rdi
-        if cfg!(target_os == "macos") {
+        buffer.push_bytes(b"\x57"); // push rdi
+        if cfg!(target_os = "macos") {
             buffer.push_bytes(b"\x48\xc7\xc0\x04\x00\x00\x02"); // mov rax, 2000004
         }
-        buffer.push_bytes(b"\x48\xc7\xc2\x01\x00\x00\x00", 7); // mov rdx, 1
+        buffer.push_bytes(b"\x48\xc7\xc2\x01\x00\x00\x00"); // mov rdx, 1
         buffer.push_bytes(b"\x0f\x05"); // syscall
-        buffer.push_u8(b"\x5f"); // pop rdi
+        buffer.push_bytes(b"\x5f"); // pop rdi
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -216,7 +221,7 @@ impl Op {
 
     #[cfg(target_arch = "x86_64")]
     fn ret(buffer: &mut Vec<u8>) {
-        buffer.push_byte(b"\xc3");
+        buffer.push_bytes(b"\xc3");
     }
 
     #[cfg(target_arch = "aarch64")]

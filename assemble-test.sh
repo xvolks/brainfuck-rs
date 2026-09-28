@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 
-clang -arch arm64 cat.S -o cata || exit 1 
+OS=$(uname -s)
 
+case $OS in 
+  Darwin)
+    clang -arch arm64 cat.S -o cat || exit 1 
+    ;;
+  Linux)
+    clang -arch x86_64 cat_x86_64.S -o cat || exit 1 
+    ;;
+  *)
+    echo "$OS no managed"
+    exit 2
+    ;;
+esac
 test_string="Hello, World!"
 result=$(echo $test_string | ./cat)
 

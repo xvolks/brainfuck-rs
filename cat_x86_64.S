@@ -1,69 +1,139 @@
-.global _main
+.global main
 .align 2
+.intel_syntax noprefix
 
 .text
-_main:
+main:
 
   // 00. Set buffer address in x0
   // Since BrainFuck has a memory space
 
-  adrp x0, buffer@PAGE         // Load the buffer page address
-  add  x0, x0, buffer@PAGEOFF  // Add the page offset
+  lea  rdi, [rip + buffer]      // Load the buffer address
+
+  // Just for fun and useful to backport the assembled instructions
+  // Create the basic instruction blocks
+
+  // A. INC
+  inc  byte ptr [rdi]	// increment at rsi
+	nop
+  add  byte ptr [rdi], 0x42
+	nop
+
+  // B. DEC
+  dec  byte ptr [rdi]	// decrement at rsi
+	nop
+  sub byte ptr [rdi], 69
+	nop
+
+  // C. LEFT
+  dec  rdi		// decrement rsi
+	nop
+  sub  rdi, 0x42
+  sub  rdi, 0x1337
+	nop
+
+  // D. RIGHT
+  inc  rdi		// increment rsi
+	nop
+  add  rdi, 0x42
+  add  rdi, 0x1337
+	nop
+
+  // E. JZ
+  movzx  eax, byte ptr [rdi]
+  test   ax, ax
+  jz     remote1
+  nop
+
+next1:
+  // F. JNZ
+  movzx  eax, byte ptr [rdi]
+  test   ax, ax
+  jnz    remote2
+  nop
+
+next2:
 
   // 0. write the INPUT (,) brainfuck block
-  mov  x4, x0         // Save x0 value
-  mov  x1, x0         // Set buffer address in x1
-  mov  x0, #0         // Set x0 to 0 (read from stdin)
-  mov  x2, #1         // Set x2 to 1 (read one byte only)
-  mov x16, #3         // Set x16 to 3 (SYSCALL read)
-  svc  #0             // Trigger kernel trap
-  cbnz x0, read_ok    // Check if we've read anything
-  mov  w8, #0
-  strb w8, [x4]       // Store 0 at [x0] (x4)
+  mov  rsi, rdi		// Save the head pointer, and set the buffer address
+  xor  rdi, rdi		// Set fd to Stdin to read from
+  mov  rdx, 1		// Set the number of chars to read
+  xor  rax, rax		// Set the syscall #0 (read)
+  syscall
+  test rax, rax	// Check if we've read anything
+  js failed		// RAX < 0: Error occured
+  jz eof			// RAX = 0: EOF reached
 read_ok:
-  mov  x0, x4         // Restore x0 value
+  jmp done
+failed:	
+  mov byte ptr [rsi], 0	// Store 0 at [rdi] (rsi)
+  mov  rdi, rsi		// Restore RDI	
+  ret
+eof:	
+  mov byte ptr [rsi], 0	// Store 0 at [rdi] (rsi)
+done:	
+  mov  rdi, rsi		// Restore RDI	
 
-
+	nop
+	
   // 1. is the end of string reached?
-  ldrb w8, [x0]
-  cbz  w8, exit
+  movzx  eax, byte ptr [rdi]
+  test ax, ax
+  jz exit
 
+	nop
 loop:
   // 2. output character if any OUPUT (.) brainfuck block
-  mov  x1, x0         // Set buffer
-  mov  x4, x0         // Save x0
-  mov  x0, #0x1       // Write to stdout
-  mov  x2, #0x1       // Write one char
-  mov x16, #0x4       // Syscall sys_write
-  svc  0x0            // Kernel trap
-  mov  x0, x4         // Restore x0
+  mov  rsi, rdi       // Set buffer
+  // mov  r8,  rdi       // Save rdi
+  mov  rdi, 0x1       // Write to stdout
+  mov  rdx, 0x1       // Write one char
+  mov  rax, 0x1       // Syscall sys_write
+  syscall             // Kernel trap
+  mov  rdi, rsi       // Restore rdi
 
+	nop
+	
   // 3. INPUT (,) brainfuck block
-  mov  x4, x0         // Save x0 value
-  mov  x1, x0         // Set buffer address in x1
-  mov  x0, #0         // Set x0 to 0 (read from stdin)
-  mov  x2, #1         // Set x2 to 1 (read one byte only)
-  mov x16, #3         // Set x16 to 3 (SYSCALL read)
-  svc  #0             // Trigger kernel trap
-  cbnz x0, read_ok_1  // Check if we've read anything
-  mov  w8, #0
-  strb w8, [x4]       // Store 0 at [x0] (x4)
-read_ok_1:
-  mov  x0, x4         // Restore x0 value
+  mov  rsi, rdi		// Save the head pointer, and set the buffer address
+  xor  rdi, rdi		// Set fd to Stdin to read from
+  mov  rdx, 1		// Set the number of chars to read
+  xor  rax, rax		// Set the syscall #0 (read)
+  syscall
+  test rax, rax 	// Check if we've read anything
+  js _failed		// RAX < 0: Error occured
+  jz _eof			// RAX = 0: EOF reached
+_read_ok:
+  jmp _done
+_failed:	
+  mov byte ptr [rsi], 0	// Store 0 at [rdi] (rsi)
+  mov  rdi, rsi		// Restore RDI	
+  ret
+_eof:	
+  mov byte ptr [rsi], 0	// Store 0 at [rdi] (rsi)
+_done:	
+  mov  rdi, rsi		// Restore RDI	
 
+	nop
   // 4. loop if last read char was not \x00
-  ldrb w8, [x0]
-  cbnz w8, loop
+  movzx  eax, byte ptr [rdi]
+  test ax, ax
+  jnz loop
 
 exit:
-  mov x0, #0              // Success exit status 0
+  mov  rdi, 0              // Success exit status 0
 
 exit_with_status:
-  mov x16, #1             // Syscall number 1: sys_exit
-  svc #0
+  mov  rax, 60		// Syscall number 1: sys_exit
+  syscall
+
+remote1:
+  jmp  next1
+
+remote2:
+  jmp  next2
 
 .data
 .align 4
 buffer:
     .space 16               // Allocate 16 bytes of zero-filled memory
-

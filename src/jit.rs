@@ -62,7 +62,7 @@ impl Op {
     #[cfg(target_arch = "aarch64")]
     fn inc(buffer: &mut Vec<u8>, operand: u32) {
         buffer.push_bytes(b"\x08\x00\x40\x39"); // ldrb w8, [x0]
-        let add_op = 0x11000108 | (operand as u8) << 10;
+        let add_op = 0x11000108 | (operand & 0xff) << 10;
         buffer.push_u32(add_op); // add w8, w8, #constant (operand)
         buffer.push_bytes(b"\x08\x00\x00\x39"); // strb w8, [x0]
     }
@@ -74,7 +74,7 @@ impl Op {
     #[cfg(target_arch = "aarch64")]
     fn dec(buffer: &mut Vec<u8>, operand: u32) {
         buffer.push_bytes(b"\x08\x00\x40\x39"); // ldrb w8, [x0]
-        let sub_op = 0x51000108 | (operand as u8) << 10;
+        let sub_op = 0x51000108 | (operand & 0xff) << 10;
         buffer.push_u32(sub_op); // sub w8, w8, operand
         buffer.push_bytes(b"\x08\x00\x00\x39"); // strb w8, [x0]
     }
@@ -90,7 +90,7 @@ impl Op {
         if operand >= 256 {
             todo!("TODO: support bigger operands");
         }
-        let add_op = 0xd1000000 | (operand as u8) << 10;
+        let add_op = 0xd1000000 | (operand & 0xff) << 10;
         buffer.push_u32(add_op); // sub x0, x0, operand
     }
 
@@ -105,7 +105,7 @@ impl Op {
         if operand >= 256 {
             todo!("TODO: support bigger operands");
         }
-        let add_op = 0x91000000 | (operand as u8) << 10;
+        let add_op = 0x91000000 | (operand & 0xff) << 10;
         buffer.push_u32(add_op); // add x0, x0, operand
     }
 

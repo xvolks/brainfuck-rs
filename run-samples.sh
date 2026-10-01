@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+HERE=$(dirname $0)
+cd $HERE
+echo "HERE: $(pwd)"
+
 spaces() {
   local len=$1
   local i
@@ -117,7 +121,7 @@ fatal() {
 run-samples() {
   cargo build 2> /dev/null && cargo build --release 2> /dev/null
   has_compress=$(grep -E 'default = \[(.+)\]' Cargo.toml)
-  echo "$(center 80 "Texte à la con" "#")"
+  echo "$(align center 80 "Texte à la con" "#")"
   echo
   if [[ -z $has_compress ]]; then
       echo "+-----------------------  COMPRESS   -------------------------------------+"

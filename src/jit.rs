@@ -1,15 +1,17 @@
 use std::{
-    ffi::{CStr, c_char},
-    fs,
+    ffi::{c_char, CStr},
     os::raw::c_void,
     ptr::null_mut,
 };
 
+#[cfg(debug_assertions)]
+use std::fs;
+
 use crate::{Cpu, Op};
 use errno::errno;
 use libc::{
-    MAP_ANONYMOUS, MAP_FAILED, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, free,
-    malloc, memcpy, memset, mmap, mprotect, munmap, strerror,
+    free, malloc, memcpy, memset, mmap, mprotect, munmap, strerror, MAP_ANONYMOUS, MAP_FAILED,
+    MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE,
 };
 
 #[cfg(target_os = "macos")]
@@ -19,6 +21,7 @@ const MAP_JIT: i32 = 0; // Unused on non macos systems
 
 const JIT_MEMORY_SIZE: usize = 1 * 1024 * 1024;
 
+#[derive(Debug, Clone)]
 struct Backpatch {
     operand_byte_addr: usize,
     src_byte_addr: usize,
@@ -53,8 +56,8 @@ impl Buffer for Vec<u8> {
 impl Op {
     #[cfg(target_arch = "x86_64")]
     fn inc(buffer: &mut Vec<u8>, operand: u32) {
-        buffer.push_bytes(b"\x80\x07"); // add byte[rdi],
-        buffer.push_u8(operand as u8);
+        buffer.push_bytes(b"\x80\x07"); // add byte ptr [rdi],
+        buffer.push_u8(operand as u8); //     constant
     }
     #[cfg(target_arch = "aarch64")]
     fn inc(buffer: &mut Vec<u8>, operand: u32) {
@@ -65,8 +68,8 @@ impl Op {
     }
     #[cfg(target_arch = "x86_64")]
     fn dec(buffer: &mut Vec<u8>, operand: u32) {
-        buffer.push_bytes(b"\x80\x2f"); // sub byte[rdi],
-        buffer.push_u8(operand as u8);
+        buffer.push_bytes(b"\x80\x2f"); // sub byte ptr [rdi],
+        buffer.push_u8(operand as u8); //     constant
     }
     #[cfg(target_arch = "aarch64")]
     fn dec(buffer: &mut Vec<u8>, operand: u32) {
@@ -93,7 +96,7 @@ impl Op {
 
     #[cfg(target_arch = "x86_64")]
     fn right(buffer: &mut Vec<u8>, operand: u32) {
-        buffer.push_bytes(b"\x48\x81\xc7"); // add rdi,
+        buffer.push_bytes(b"\x48\x81\xc7"); // add rdi, operand
         buffer.push_u32(operand);
     }
 
@@ -108,13 +111,15 @@ impl Op {
 
     #[cfg(target_arch = "x86_64")]
     fn out(buffer: &mut Vec<u8>) {
-        buffer.push_bytes(b"\x57"); // push rdi
-        if cfg!(target_os = "macos") {
-            buffer.push_bytes(b"\x48\xc7\xc0\x04\x00\x00\x02"); // mov rax, 2000004
-        }
-        buffer.push_bytes(b"\x48\xc7\xc2\x01\x00\x00\x00"); // mov rdx, 1
-        buffer.push_bytes(b"\x0f\x05"); // syscall
-        buffer.push_bytes(b"\x5f"); // pop rdi
+        buffer.push_bytes(b"\x48\x89\xfe"); // MOV        RSI,RDI
+        buffer.push_bytes(b"\x48\xc7\xc7"); // MOV        RDI,0x1
+        buffer.push_bytes(b"\x01\x00\x00\x00");
+        buffer.push_bytes(b"\x48\xc7\xc2"); // MOV        RDX,0x1
+        buffer.push_bytes(b"\x01\x00\x00\x00");
+        buffer.push_bytes(b"\x48\xc7\xc0"); // MOV        RAX,0x1
+        buffer.push_bytes(b"\x01\x00\x00\x00");
+        buffer.push_bytes(b"\x0f\x05"); // SYSCALL
+        buffer.push_bytes(b"\x48\x89\xf7"); // MOV        RDI,RSI
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -130,13 +135,25 @@ impl Op {
 
     #[cfg(target_arch = "x86_64")]
     fn inp(buffer: &mut Vec<u8>) {
-        buffer.push_bytes(b"\x57"); // push rdi
-        if cfg!(target_os = "macos") {
-            buffer.push_bytes(b"\x48\xc7\xc0\x03\x00\x00\x02"); // mov rax, 2000003
-        }
-        buffer.push_bytes(b"\x48\xc7\xc2\x01\x00\x00\x00"); // mov rdx, 1
-        buffer.push_bytes(b"\x0f\x05"); // syscall
-        buffer.push_bytes(b"\x5f"); // pop rdi
+        buffer.push_bytes(b"\x48\x89\xfe"); //        MOV        RSI,RDI
+        buffer.push_bytes(b"\x48\x31\xff"); //        XOR        RDI,RDI
+        buffer.push_bytes(b"\x48\xc7\xc2"); //        MOV        RDX,0x1
+        buffer.push_bytes(b"\x01\x00\x00\x00");
+        buffer.push_bytes(b"\x48\x31\xc0"); //        XOR        RAX,RAX
+        buffer.push_bytes(b"\x0f\x05"); //        SYSCALL
+        buffer.push_bytes(b"\x48\x85\xc0"); //        TEST       RAX,RAX
+        buffer.push_bytes(b"\x78\x04"); //        JS         failed
+        buffer.push_bytes(b"\x74\x09"); //        JZ         eof
+                                        // read_ok:
+        buffer.push_bytes(b"\xeb\x0a"); //        JMP        done
+                                        // failed:
+        buffer.push_bytes(b"\xc6\x06\x00"); //        MOV        byte ptr [RSI]=>buffer,0x0
+        buffer.push_bytes(b"\x48\x89\xf7"); //        MOV        RDI,RSI
+        buffer.push_bytes(b"\xc3"); //        RET
+                                    // eof:
+        buffer.push_bytes(b"\xc6\x06\x00"); //        MOV        byte ptr [RSI]=>buffer,0x0
+                                            // done:
+        buffer.push_bytes(b"\x48\x89\xf7"); //        MOV        RDI,RSI
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -150,17 +167,17 @@ impl Op {
         buffer.push_bytes(b"\x60\x00\x00\xb5"); //     cbnz       x0,read_ok
         buffer.push_bytes(b"\x08\x00\x80\x52"); //     mov        w8,#0x0
         buffer.push_bytes(b"\x88\x00\x00\x39"); //     strb       w8,[x4]=>buffer
-        // read_ok:
+                                                // read_ok:
         buffer.push_bytes(b"\xe0\x03\x04\xaa"); //     mov        x0,x4
     }
 
     #[cfg(target_arch = "x86_64")]
     fn jz(buffer: &mut Vec<u8>, operand: usize, backpatches: &mut Vec<Backpatch>) {
-        buffer.push_bytes(b"\x8a\x07"); // mov al, byte [rdi]
-        buffer.push_bytes(b"\x84\xc0"); // test al, al
+        buffer.push_bytes(b"\x0f\xb6\x07"); // 0f b6 07        MOVZX      EAX,byte ptr [RDI]
+        buffer.push_bytes(b"\x66\x85\xc0"); // 66 85 c0        TEST       AX,AX
         buffer.push_bytes(b"\x0f\x84"); // jz
         let operand_byte_addr = buffer.len();
-        buffer.push_bytes(b"\x00\x00\x00\x00");
+        buffer.push_bytes(b"\x00\x00\x00\x00"); // relative address
         let src_byte_addr = buffer.len();
         let bp = Backpatch {
             operand_byte_addr,
@@ -188,8 +205,8 @@ impl Op {
 
     #[cfg(target_arch = "x86_64")]
     fn jnz(buffer: &mut Vec<u8>, operand: usize, backpatches: &mut Vec<Backpatch>) {
-        buffer.push_bytes(b"\x8a\x07"); // mov al, byte [rdi]
-        buffer.push_bytes(b"\x84\xc0"); // test al, al
+        buffer.push_bytes(b"\x0f\xb6\x07"); // 0f b6 07        MOVZX      EAX,byte ptr [RDI]
+        buffer.push_bytes(b"\x66\x85\xc0"); // 66 85 c0        TEST       AX,AX
         buffer.push_bytes(b"\x0f\x85"); // jnz
         let operand_byte_addr = buffer.len();
         buffer.push_bytes(b"\x00\x00\x00\x00");
@@ -243,6 +260,8 @@ fn to_string(char_ptr: *mut c_char) -> String {
 
 impl Cpu {
     pub fn execute_jit(&mut self) -> std::io::Result<()> {
+        #[cfg(debug_assertions)]
+        println!("execute_jit function call");
         let ops: &[Op] = &self.ops;
         let mut native_mem = vec![];
         let mut instruction_addrs = vec![];
@@ -282,23 +301,21 @@ impl Cpu {
                     (operand >= -0x40000 && operand <= 0x40000),
                     "TODO: branch too far"
                 );
-                // *(uint32_t*) &sb.items[bp.operand_byte_addr] |= (uint32_t) ((operand / 4) & 0x7ffff) << 5;
-                // println!("origin: {:?}, operand: {:04x}", bp.origin, operand);
                 let patch = ((operand / 4) & 0x7ffff) << 5;
-                // println!("patch: {patch:04x}");
                 for i in 0..4 {
-                    // TODO: check this 🫠
                     native_mem[bp.operand_byte_addr + i] |= (patch >> (8 * i)) as u8 & 0xff;
                 }
             } else if cfg!(target_arch = "x86_64") {
                 for i in 0..4 {
-                    native_mem[bp.operand_byte_addr + i] |= (operand >> (24 - 8 * i)) as u8 & 0xff;
+                    native_mem[bp.operand_byte_addr + i] |= (operand >> (8 * i)) as u8 & 0xff;
                 }
             } else {
                 panic!("Unmanaged architecture");
             }
         }
 
+        #[cfg(debug_assertions)]
+        Cpu::inspect_generated_code(&native_mem, &ops, &instruction_addrs, &backpatches);
         #[cfg(debug_assertions)]
         fs::write("ops.bin", &native_mem)?;
 
@@ -335,5 +352,54 @@ impl Cpu {
             free(memory);
         }
         Ok(())
+    }
+
+    #[cfg(debug_assertions)]
+    fn inspect_generated_code(
+        native_mem: &[u8],
+        ops: &[Op],
+        instruction_addrs: &[usize],
+        backpatches: &[Backpatch],
+    ) {
+        let mut last_addr = 0;
+        println!("native_mem: {native_mem:02x?}");
+        for (i, addr) in instruction_addrs.iter().enumerate() {
+            if *addr > 0 {
+                println!("addr range: {last_addr}..{addr}");
+                for j in last_addr..*addr {
+                    print!("{code:02x} ", code = native_mem[j]);
+                }
+                println!(
+                    "\naddr: 0x{:04x}------------------------------------------------<",
+                    addr
+                );
+            }
+            last_addr = *addr;
+            if i == ops.len() {
+                println!("Instruction #{i:02} at : 0x{addr:04x} -> Ret",);
+            } else if i > ops.len() {
+                println!("Instruction #{i:02} at : 0x{addr:04x} -> ????",);
+            } else {
+                let ins: Vec<&Backpatch> = backpatches
+                    .iter()
+                    .filter(|c| {
+                        std::mem::discriminant(&c.origin) == std::mem::discriminant(&ops[i])
+                    })
+                    .collect();
+                if ins.is_empty() {
+                    println!(
+                        "Instruction #{i:02} at : 0x{addr:04x} -> {op:?}",
+                        op = ops[i]
+                    );
+                } else {
+                    let dsts: Vec<usize> = ins.iter().map(|c| c.dst_op_index).collect();
+                    println!(
+                        "Instruction #{i:02} at : 0x{addr:04x} -> {op:?} --> {dst:?}",
+                        op = ops[i],
+                        dst = dsts
+                    );
+                }
+            }
+        }
     }
 }

@@ -166,6 +166,7 @@ impl<T> Stack<T> {
     pub fn pop(&mut self) -> T {
         self.elements.pop().expect("Unbalanced stack")
     }
+    #[allow(dead_code)]
     pub fn peek(&self) -> &T {
         self.elements
             .iter()
@@ -201,9 +202,10 @@ impl Cpu {
 
     pub fn execute(&mut self) {
         if self.jit {
-            return self.execute_jit().map_err(|err| {
-                println!("Error: {err}")
-            }).expect("Failed");
+            return self
+                .execute_jit()
+                .map_err(|err| println!("Error: {err}"))
+                .expect("Failed");
         }
         let getch = getch::Getch::new();
         loop {
@@ -384,7 +386,6 @@ fn main() {
     } else {
         let mut jit = true;
         for arg in args().skip(1) {
-
             if arg == "--no-jit" {
                 jit = false;
                 continue;

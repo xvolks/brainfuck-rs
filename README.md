@@ -38,4 +38,4 @@ The following limitations exist and are planned for future improvements:
 - **No --help or usage information**: Entering without arguments prints a hardcoded program rather than showing usage
 - **Character output may be non-printable**: The `OUT` operation casts cell values directly to `char`, which may produce unexpected results for non-printable ASCII
 - **No REPL or interactive mode beyond single-key input**: Would benefit from a proper REPL with multi-line support
-- **No cross-platform tests**: Only tested on Arm64 macOS and x86_64 Linux.
+- **Partial cross-platform tests**: Only tested on Arm64 macOS and x86_64/aarch64 Linux.

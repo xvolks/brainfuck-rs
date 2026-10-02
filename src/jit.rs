@@ -1,10 +1,11 @@
 use std::{
+    env,
     ffi::{c_char, CStr},
+    io::Write,
     os::raw::c_void,
     ptr::null_mut,
 };
 
-#[cfg(debug_assertions)]
 use std::fs;
 
 use crate::{Cpu, Op};
@@ -13,6 +14,12 @@ use libc::{
     free, malloc, memcpy, memset, mmap, mprotect, munmap, strerror, MAP_ANONYMOUS, MAP_FAILED,
     MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE,
 };
+
+use libc::{fflush, FILE};
+
+// unsafe extern "C" {
+//     fn jit_flush_code(start: *mut c_void, end: *mut c_void);
+// }
 
 #[cfg(target_os = "macos")]
 use libc::MAP_JIT;
@@ -26,12 +33,14 @@ struct Backpatch {
     operand_byte_addr: usize,
     src_byte_addr: usize,
     dst_op_index: usize,
+    #[allow(dead_code)]
     origin: Op,
 }
 
 trait Buffer {
     fn push_bytes(&mut self, bytes: &[u8]);
     fn push_u32(&mut self, bytes: u32);
+    #[allow(unused)]
     fn push_u8(&mut self, byte: u8);
 }
 
@@ -128,7 +137,13 @@ impl Op {
         buffer.push_bytes(b"\xe4\x03\x00\xaa"); // mov x4, x0
         buffer.push_bytes(b"\x20\x00\x80\xd2"); // mov x0, 1
         buffer.push_bytes(b"\x22\x00\x80\xd2"); // mov x2, 1
-        buffer.push_bytes(b"\x90\x00\x80\xd2"); // mov x16, 4
+        if cfg!(target_os = "macos") {
+            buffer.push_bytes(b"\x90\x00\x80\xd2"); // mov x16, 4
+        } else if cfg!(target_os = "linux") {
+            buffer.push_bytes(b"\x08\x08\x80\xd2"); // mov x8, 4
+        } else {
+            panic!("This OS is not managed");
+        }
         buffer.push_bytes(b"\x01\x00\x00\xd4"); // svc 0
         buffer.push_bytes(b"\xe0\x03\x04\xaa"); // mov x0, x4
     }
@@ -162,7 +177,13 @@ impl Op {
         buffer.push_bytes(b"\xe1\x03\x00\xaa"); //     mov        x1,x0
         buffer.push_bytes(b"\x00\x00\x80\xd2"); //     mov        x0,#0x0
         buffer.push_bytes(b"\x22\x00\x80\xd2"); //     mov        x2,#0x1
-        buffer.push_bytes(b"\x70\x00\x80\xd2"); //     mov        x16,#0x3
+        if cfg!(target_os = "macos") {
+            buffer.push_bytes(b"\x70\x00\x80\xd2"); //     mov        x16,#0x3
+        } else if cfg!(target_os = "linux") {
+            buffer.push_bytes(b"\xe8\x07\x80\xd2"); //     mov        x8,#63
+        } else {
+            panic!("This OS is not managed");
+        }
         buffer.push_bytes(b"\x01\x00\x00\xd4"); //     svc        0x0
         buffer.push_bytes(b"\x60\x00\x00\xb5"); //     cbnz       x0,read_ok
         buffer.push_bytes(b"\x08\x00\x80\x52"); //     mov        w8,#0x0
@@ -258,10 +279,25 @@ fn to_string(char_ptr: *mut c_char) -> String {
         .to_string()
 }
 
+trait Hello {
+    fn hey() -> String;
+}
+
+impl Hello for () {
+    #[cfg(target_arch = "aarch64")]
+    fn hey() -> String {
+        format!("Hey from aarch64")
+    }
+    #[cfg(target_arch = "x86_64")]
+    fn hey() -> String {
+        format!("Hey from x86_64")
+    }
+}
+
 impl Cpu {
     pub fn execute_jit(&mut self) -> std::io::Result<()> {
         #[cfg(debug_assertions)]
-        println!("execute_jit function call");
+        println!("{}. execute_jit function call", <() as Hello>::hey());
         let ops: &[Op] = &self.ops;
         let mut native_mem = vec![];
         let mut instruction_addrs = vec![];
@@ -318,6 +354,15 @@ impl Cpu {
         Cpu::inspect_generated_code(&native_mem, &ops, &instruction_addrs, &backpatches);
         #[cfg(debug_assertions)]
         fs::write("ops.bin", &native_mem)?;
+        #[cfg(not(debug_assertions))]
+        match env::var("DUMP_ASM") {
+            Ok(_) => {
+                let _ = fs::write("ops.bin", &native_mem).map_err(|err| {
+                    println!("ERROR: cannot write ops.bin: {err}");
+                });
+            }
+            Err(_) => (),
+        }
 
         #[cfg(debug_assertions)]
         println!("Mem: {:02x?}", native_mem);
@@ -338,6 +383,7 @@ impl Cpu {
             memcpy(addr, native_mem.as_ptr() as *const c_void, native_mem.len());
             mprotect(addr, native_mem.len(), PROT_EXEC | PROT_READ);
             let pointer = addr; // as fn() as *mut c_void ();
+            eprintln!("Code Address = {:x}", pointer as u64);
             let brainfuck_code = std::mem::transmute::<*mut c_void, fn(*mut c_void)>(pointer);
 
             let memory = malloc(JIT_MEMORY_SIZE);
@@ -346,10 +392,14 @@ impl Cpu {
                 munmap(addr, native_mem.len());
                 return Err(std::io::Error::last_os_error());
             }
+            eprintln!("Memory Address = {:x}", memory as u64);
             memset(memory, 0, JIT_MEMORY_SIZE);
+            // Flush I-cache for the JIT region before first execution
+            // jit_flush_code(addr, addr.add(native_mem.len()));
             brainfuck_code(memory);
             munmap(addr, native_mem.len());
             free(memory);
+            std::io::stdout().flush()?;
         }
         Ok(())
     }

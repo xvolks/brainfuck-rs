@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
 
 OS=$(uname -s)
+ARCH=$(uname -m)
+
+if [[ $ARCH == arm64 ]]; then
+    ARCH=aarch64
+fi
 
 case $OS in 
-  Darwin)
-    clang -arch arm64 cat.S -o cat || exit 1 
-    ;;
-  Linux)
-    clang -arch x86_64 cat_x86_64.S -o cat || exit 1 
+    Darwin)
+	clang -arch arm64 cat.S -o cat || exit 1 
+	;;
+    Linux)
+	case $ARCH in
+	    aarch64)
+		clang -arch aarch64 cat.S -o cat || exit 1 
+		;;
+	    x86_64)
+		clang -arch x86_64 cat_x86_64.S -o cat || exit 1 
+		;;
+	esac
     ;;
   *)
     echo "$OS no managed"
